@@ -5,15 +5,18 @@ needs be.
 */
 
 use std::{
-    fs, 
-    io::{BufRead, BufReader, Write}, 
-    net::{TcpListener, TcpStream}
+    fs, net::{
+        TcpListener, 
+        TcpStream
+    }
 };
-use log::{debug, info};
+use http_server::http_request::*;
+use log::error;
 use env_logger::Env;
 
 fn main() {
     env_logger::Builder::from_env(Env::default().default_filter_or("debug")).init();
+    // env::set_var("RUST_BACKTRACE", "1");
     start_server();
 }
 
@@ -24,48 +27,56 @@ pub fn start_server() -> () {
     }
 }
 
-fn handle_connection(mut stream: TcpStream){
-    info!("Incoming request from: {}",&stream.peer_addr().unwrap());
-    let buffer = BufReader::new(&mut stream);
+fn handle_connection(stream: TcpStream){
+    
+    let request = HttpRequest::new(stream);
 
-
-    // basic data parse TODO: Extract to HttpRequest? 
-    let http_request:Vec<_> = buffer.lines()
-        .map(|result| result.unwrap())
-        .take_while(|line| !line.is_empty())
-        .collect();
-
-    debug!("Incoming request is : {:?}", http_request);
-    let request = HttpRequest::new(http_request.as_slice());
-    successful_connection_response(stream, request);
+    /* FIXME: 
+        Currently failed to wrap requests don't get served an error page.
+        These requests are just dropped, they aren't even logged because the original request 
+        is owned by the HttpRequest object that failed to init.
+        This may be fixable by having a custom error that wraps the original request stream, 
+        so it is passed back to this scope to be handled properly.  
+     */
+    match request {
+        Ok(request) => response_router(request),
+        Err(e) => error!("Request fail to wrap and was dropped: {e}"),
+    };
 
     
 }
 
-fn successful_connection_response(stream: TcpStream, request: HttpRequest){
+fn response_router(request: HttpRequest){
     if request.req_uri == "/" {
-        response_page_index(stream);
+        response_page_index(request);
     }
     else {
-        response_404(stream);
+        response_404(request);
     }
     
 }
 
-fn response_page_index(mut stream: TcpStream) {
+/* -------------------------------------------------------------------------- */
+/*                               Basic responses                              */
+/* -------------------------------------------------------------------------- */
+
+/* TODO:
+    Need to create abstraction that handles the creation and formatting of replies.
+*/
+fn response_page_index(mut request: HttpRequest) {
     let response_code = "HTTP/1.1 200 OK";
     let response_body = fs::read_to_string("html_responses/index.html").unwrap();
     let response_length = response_body.len();
     let response_msg = format!("{response_code}\r\n{response_length}\r\n\r\n{response_body}");
-    stream.write_all(response_msg.as_bytes()).unwrap();
+    request.write_all(&response_msg).unwrap();
 }
 
-fn response_404(mut stream: TcpStream){
+fn response_404(mut request: HttpRequest){
     let response_code = "HTTP/1.1 404 Not found";
     let response_body = fs::read_to_string("html_responses/404.html").unwrap();
     let response_length = response_body.len();
     let response_msg = format!("{response_code}\r\n{response_length}\r\n\r\n{response_body}");
-    stream.write_all(response_msg.as_bytes()).unwrap();
+    request.write_all(&response_msg).unwrap();
 }
 
 
@@ -73,35 +84,3 @@ fn response_404(mut stream: TcpStream){
 /* -------------------------------------------------------------------------- */
 /*                              will be extracted                             */
 /* -------------------------------------------------------------------------- */
-#[derive(Debug)]
-pub enum HttpRequestType {
-    Get,
-
-}
-
-#[derive(Debug)]
-pub struct HttpRequest {
-    req_type: HttpRequestType,
-    req_uri: String,
-    // http_ver: f32,
-    // req_header: Vec<String>, //NOTE: This may later be changed to a struct to make accessing individual headers easier.
-}
-impl HttpRequest {
-    pub fn new(request: &[String]) -> Self{
-        let mut req_iter = request.iter();
-        let headers: Vec<_>= req_iter.next().unwrap().split(" ").collect();
-        let req_type = match headers[0]{
-            "GET" => HttpRequestType::Get,
-            _ => todo!()
-        };
-
-        let req_uri = if !headers[1].is_empty() {String::from(headers[1])} else {todo!()};
-
-        HttpRequest{
-            req_type,
-            req_uri,
-            // http_ver: TODO: ?
-            // req_header: TODO: ?
-        }
-    }
-}
